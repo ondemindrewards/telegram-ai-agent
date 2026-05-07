@@ -23,7 +23,7 @@ HEADERS = {
 }
 
 # =========================
-# MEMORY SYSTEM
+# MEMORY
 # =========================
 MEMORY_FILE = "memory.json"
 
@@ -42,10 +42,7 @@ memory = load_memory()
 def get_user(uid):
     uid = str(uid)
     if uid not in memory:
-        memory[uid] = {
-            "history": [],
-            "summary": ""
-        }
+        memory[uid] = {"history": [], "summary": ""}
     return memory[uid]
 
 def compress(user):
@@ -53,7 +50,7 @@ def compress(user):
     user["summary"] = " | ".join(user["history"][-10:])
 
 # =========================
-# WEB SEARCH (FREE)
+# STEP 1: SEARCH
 # =========================
 def web_search(query):
     try:
@@ -73,87 +70,93 @@ def web_search(query):
         if data.get("AbstractText"):
             results.append(data["AbstractText"])
 
-        for topic in data.get("RelatedTopics", [])[:5]:
+        for topic in data.get("RelatedTopics", [])[:10]:
             if isinstance(topic, dict) and topic.get("Text"):
                 results.append(topic["Text"])
 
-        return results[:5]
+        return results[:8]
 
     except:
         return []
 
 # =========================
-# URL CONTENT READER
+# STEP 2: URL EXTRACTION
 # =========================
 def extract_urls(text):
     return re.findall(r'https?://\\S+', text)
 
+# =========================
+# STEP 3: FETCH CONTENT
+# =========================
 def fetch_url(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
 
         if r.status_code != 200:
-            return f"Fehler {r.status_code}"
+            return ""
 
         html = r.text
 
-        # clean html
         html = re.sub(r'<script.*?</script>', '', html, flags=re.S)
         html = re.sub(r'<style.*?</style>', '', html, flags=re.S)
         html = re.sub(r'<.*?>', ' ', html)
 
-        return html[:3000]
+        return html[:2500]
 
-    except Exception as e:
-        return str(e)
-
-# =========================
-# MEMORY UPDATE
-# =========================
-def update_memory(uid, text):
-    user = get_user(uid)
-    user["history"].append(text)
-    save_memory(memory)
+    except:
+        return ""
 
 # =========================
-# SYSTEM PROMPT (RESEARCH MODE)
+# STEP 4: RESEARCH PIPELINE (MULTI STEP)
+# =========================
+def build_research_package(query):
+    search_results = web_search(query)
+
+    # optional: extract fake URLs from results text
+    urls = []
+    for r in search_results:
+        urls += extract_urls(r)
+
+    urls = list(set(urls))[:3]
+
+    url_content = ""
+    for u in urls:
+        url_content += fetch_url(u) + "\n\n"
+
+    return {
+        "search": "\n".join(search_results),
+        "urls": url_content
+    }
+
+# =========================
+# SYSTEM PROMPT (PREMIUM RESEARCH)
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein professioneller Deep-Research-KI-Assistent. "
-    "Du analysierst Informationen aus Websuche und Webseiteninhalt. "
+    "Du bist ein professioneller Multi-Step Research AI Agent. "
+    "Du analysierst Informationen wie ein Analyst. "
 
-    "ARBEITSWEISE:"
-    "1. Verstehe die Frage"
-    "2. Nutze Webdaten + Webseiteninhalt"
-    "3. Strukturierte Analyse schreiben"
-    "4. Klare Schlussfolgerung geben"
+    "DU ARBEITEST IN GEDANKLICHEN SCHRITTEN:"
+    "1. Verstehen der Frage"
+    "2. Analyse der Webdaten"
+    "3. Vergleich der Informationen"
+    "4. Bildung einer finalen, strukturierten Antwort"
 
     "REGELN:"
     "- Keine Halluzinationen"
     "- Nur basierend auf Daten antworten"
-    "- Strukturiert und professionell"
+    "- Strukturierte Antwort (Einleitung, Analyse, Fazit)"
 )
 
 # =========================
-# AI RESEARCH ENGINE
+# AI ENGINE
 # =========================
 def ask_ai(uid, user_text):
     try:
         user = get_user(uid)
         compress(user)
 
-        # 🌐 WEB SEARCH
-        search_results = web_search(user_text)
-        web_data = "\n".join(search_results)
-
-        # 🌐 URL CONTENT
-        urls = extract_urls(user_text)
-        url_data = ""
-
-        for u in urls[:2]:
-            url_data += "\n\nURL CONTENT:\n"
-            url_data += fetch_url(u)
+        research = build_research_package(user_text)
 
         memory_block = f"MEMORY: {user['summary']}"
 
@@ -165,11 +168,11 @@ def ask_ai(uid, user_text):
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"""
-WEB SEARCH:
-{web_data}
+STEP 1 - SEARCH DATA:
+{research['search']}
 
-URL DATA:
-{url_data}
+STEP 2 - WEB CONTENT:
+{research['urls']}
 
 MEMORY:
 {memory_block}
@@ -178,8 +181,8 @@ QUESTION:
 {user_text}
 """}
                 ],
-                "temperature": 0.3,
-                "max_tokens": 900
+                "temperature": 0.25,
+                "max_tokens": 1000
             },
             timeout=60
         )
@@ -201,7 +204,9 @@ async def handle(message: Message):
     uid = message.from_user.id
     text = message.text or ""
 
-    update_memory(uid, text)
+    user = get_user(uid)
+    user["history"].append(text)
+    save_memory(memory)
 
     answer = ask_ai(uid, text)
 
