@@ -3,7 +3,6 @@ import asyncio
 import requests
 import json
 import re
-from collections import defaultdict
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
@@ -51,29 +50,52 @@ def compress(user):
     user["summary"] = " | ".join(user["history"][-10:])
 
 # =========================
-# MULTI SEARCH ENGINE
+# TRUST SCORE
+# =========================
+def domain_trust(url: str):
+    url = (url or "").lower()
+
+    if "wikipedia.org" in url:
+        return 10
+    if "britannica.com" in url:
+        return 9
+    if any(x in url for x in ["reuters", "bbc", "nytimes", "cnn"]):
+        return 8
+    if any(x in url for x in ["medium", "blog"]):
+        return 4
+    return 6
+
+# =========================
+# WEB SEARCH
 # =========================
 def web_search(query):
     try:
-        url = "https://api.duckduckgo.com/"
-        params = {
-            "q": query,
-            "format": "json",
-            "no_html": 1,
-            "skip_disambig": 1
-        }
+        r = requests.get(
+            "https://api.duckduckgo.com/",
+            params={
+                "q": query,
+                "format": "json",
+                "no_html": 1,
+                "skip_disambig": 1
+            },
+            timeout=10
+        )
 
-        r = requests.get(url, params=params, timeout=10)
         data = r.json()
-
         results = []
 
         if data.get("AbstractText"):
-            results.append(data["AbstractText"])
+            results.append({
+                "text": data["AbstractText"],
+                "url": data.get("AbstractURL", "")
+            })
 
-        for topic in data.get("RelatedTopics", [])[:10]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append(topic["Text"])
+        for t in data.get("RelatedTopics", [])[:10]:
+            if isinstance(t, dict) and t.get("Text"):
+                results.append({
+                    "text": t["Text"],
+                    "url": t.get("FirstURL", "")
+                })
 
         return results
 
@@ -81,81 +103,59 @@ def web_search(query):
         return []
 
 # =========================
-# QUALITY SCORING (SIMPLE RANKING ENGINE)
+# RANK + DEDUPE
 # =========================
-def score_source(text):
-    score = 0
-
-    # length = more info = better
-    score += min(len(text) / 200, 5)
-
-    # keywords boost
-    trusted_keywords = ["study", "research", "data", "analysis", "report", "official"]
-    for k in trusted_keywords:
-        if k in text.lower():
-            score += 2
-
-    return score
-
-def deduplicate_and_rank(results):
+def rank_sources(results):
     seen = set()
     scored = []
 
     for r in results:
-        clean = r.strip()
-        if not clean:
+        text = r.get("text", "")
+        url = r.get("url", "")
+
+        if not text:
             continue
 
-        # dedup
-        if clean.lower() in seen:
+        key = text.lower()
+        if key in seen:
             continue
+        seen.add(key)
 
-        seen.add(clean.lower())
+        trust = domain_trust(url)
+        score = trust + min(len(text) / 300, 3)
 
-        scored.append((score_source(clean), clean))
+        scored.append({
+            "text": text,
+            "url": url,
+            "trust": trust,
+            "score": score
+        })
 
-    # sort by score (highest first)
-    scored.sort(reverse=True, key=lambda x: x[0])
-
-    return [s[1] for s in scored[:8]]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:8]
 
 # =========================
-# RESEARCH BUILDER
+# BUILD RESEARCH PACK
 # =========================
 def build_research(query):
-    # Multi-query expansion
-    queries = [
-        query,
-        query + " explanation",
-        query + " facts",
-    ]
+    raw = web_search(query)
+    ranked = rank_sources(raw)
 
-    all_results = []
+    out = []
+    for i, r in enumerate(ranked, 1):
+        out.append(f"[{i}] (Trust {r['trust']}) {r['text']} | {r['url']}")
 
-    for q in queries:
-        all_results.extend(web_search(q))
-
-    ranked = deduplicate_and_rank(all_results)
-
-    return "\n".join(ranked)
+    return "\n".join(out)
 
 # =========================
-# SYSTEM PROMPT (PRO LEVEL)
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein professioneller Research AI Agent mit Quellenlogik. "
-    "Du analysierst Informationen strukturiert und vergleichst Quellen. "
-
-    "ARBEITSWEISE:"
-    "1. Informationen lesen"
-    "2. Unterschiede erkennen"
-    "3. logische Zusammenfassung erstellen"
-    "4. klare, saubere Antwort liefern"
-
-    "REGELN:"
-    "- keine Halluzinationen"
-    "- nutze nur bereitgestellte Daten"
-    "- klare Struktur"
+    "Du bist ein professioneller Research AI Assistant. "
+    "Du arbeitest mit priorisierten Quellen und Zitaten. "
+    "Antworte strukturiert: Erklärung → Analyse → Fazit. "
+    "Nutze nur bereitgestellte Informationen. "
+    "Wenn möglich, beziehe dich auf Quellen [1], [2]."
 )
 
 # =========================
@@ -166,9 +166,7 @@ def ask_ai(uid, user_text):
         user = get_user(uid)
         compress(user)
 
-        research_data = build_research(user_text)
-
-        memory_block = f"MEMORY: {user['summary']}"
+        research = build_research(user_text)
 
         response = requests.post(
             API_URL,
@@ -178,13 +176,13 @@ def ask_ai(uid, user_text):
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"""
-RESEARCH SOURCES (ranked + deduplicated):
-{research_data}
+QUELLEN:
+{research}
 
 MEMORY:
-{memory_block}
+{user['summary']}
 
-QUESTION:
+FRAGE:
 {user_text}
 """}
                 ],
@@ -195,10 +193,9 @@ QUESTION:
         )
 
         if response.status_code != 200:
-            return "API Fehler"
+            return f"API Fehler {response.text}"
 
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        return response.json()["choices"][0]["message"]["content"]
 
     except Exception as e:
         return f"Fehler: {e}"
@@ -216,7 +213,6 @@ async def handle(message: Message):
     save_memory(memory)
 
     answer = ask_ai(uid, text)
-
     await message.answer(answer)
 
 # =========================
