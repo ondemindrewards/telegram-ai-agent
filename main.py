@@ -27,7 +27,7 @@ def ask_ai(prompt):
         print("TEXT:", r.text)
 
         if r.status_code != 200:
-            return "HF API Fehler"
+    return f"HF Fehler {r.status_code}: {r.text}"
 
         data = r.json()
 
