@@ -25,8 +25,13 @@ def ask_ai(prompt):
     try:
         data = r.json()
 
-        if isinstance(data, list):
-            return data[0].get("generated_text", "Keine Antwort")
+    if isinstance(data, list):
+    if isinstance(data[0], dict):
+        return data[0].get("generated_text", str(data[0]))
+    return str(data[0])
+
+if isinstance(data, dict):
+    return data.get("generated_text", str(data))
 
         return str(data)
 
