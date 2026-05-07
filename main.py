@@ -4,7 +4,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 
-# Tokens (Railway Variables)
+# Railway Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
@@ -12,8 +12,8 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ✔ funktionierendes Modell
-API_URL = "https://api-inference.huggingface.co/models/gpt2"
+# ✔ stabiler HuggingFace Endpoint
+API_URL = "https://api-inference.huggingface.co/models/distilgpt2"
 
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}"
@@ -25,19 +25,24 @@ def ask_ai(prompt):
         r = requests.post(
             API_URL,
             headers=headers,
-            json={"inputs": prompt}
+            json={"inputs": prompt},
+            timeout=30
         )
 
         print("STATUS:", r.status_code)
         print("TEXT:", r.text)
 
+        # Fehler abfangen
         if r.status_code != 200:
             return f"HF Fehler {r.status_code}: {r.text}"
 
         data = r.json()
 
+        # Antwort auslesen
         if isinstance(data, list) and len(data) > 0:
-            return data[0].get("generated_text", str(data[0])) if isinstance(data[0], dict) else str(data[0])
+            if isinstance(data[0], dict):
+                return data[0].get("generated_text", str(data[0]))
+            return str(data[0])
 
         if isinstance(data, dict):
             return data.get("generated_text", str(data))
@@ -48,7 +53,7 @@ def ask_ai(prompt):
         return f"Bot Fehler: {e}"
 
 
-# Message Handler (aiogram v3 korrekt)
+# Telegram Handler
 @dp.message()
 async def handle(message: Message):
     user_text = message.text or ""
