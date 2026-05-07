@@ -1,6 +1,7 @@
 import os
 import asyncio
 import requests
+import json
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
@@ -22,7 +23,27 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # =========================
-# API
+# MEMORY FILE
+# =========================
+MEMORY_FILE = "memory.json"
+
+def load_memory():
+    try:
+        if os.path.exists(MEMORY_FILE):
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
+    except:
+        return {}
+
+def save_memory(data):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+memory = load_memory()
+
+# =========================
+# GROQ API
 # =========================
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -32,48 +53,55 @@ HEADERS = {
 }
 
 # =========================
-# SYSTEM PROMPT (CONTROL + CLEAN)
+# SYSTEM PROMPT (MEMORY AWARE)
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein extrem hilfreicher, kooperativer und gut steuerbarer Chat-Assistent in Telegram. "
-    "Du folgst Anweisungen sehr genau und bist immer freundlich, direkt und klar. "
-
-    "REGELN:"
-    "- Keine Hinweise auf KI, Modelle oder Systemdetails "
-    "- Keine Disclaimer oder unnötige Erklärungen "
-    "- Keine Wiederholungen "
-    "- Antworte immer präzise und hilfreich "
-    "- Passe dich dem Nutzerstil an (locker oder ernst) "
+    "Du bist ein intelligenter, natürlicher Chat-Assistent. "
+    "Du sprichst wie ein Mensch im Chat. "
+    "Du nutzt gespeicherte Informationen über den Nutzer, wenn sie hilfreich sind. "
+    "Du bist freundlich, direkt und merkst dir wichtige Details über Zeit hinweg."
 )
 
 # =========================
-# COMMAND HANDLING
+# MEMORY HELPER
 # =========================
-def parse_command(text: str):
-    text = text.strip().lower()
+def get_user_memory(user_id: str):
+    return memory.get(str(user_id), {})
 
-    if text.startswith("/help"):
-        return "short", "Ich kann dir helfen. Schreib mir einfach deine Frage 🙂"
+def update_user_memory(user_id: str, text: str):
+    user_id = str(user_id)
 
-    if text.startswith("/short"):
-        return "short", text.replace("/short", "").strip()
+    if user_id not in memory:
+        memory[user_id] = {
+            "facts": [],
+            "last_messages": []
+        }
 
-    if text.startswith("/long"):
-        return "long", text.replace("/long", "").strip()
+    # einfache "intelligente" Speicherung
+    memory[user_id]["last_messages"].append(text)
 
-    return "normal", text
+    # nur letzte 10 speichern
+    memory[user_id]["last_messages"] = memory[user_id]["last_messages"][-10:]
+
+    save_memory(memory)
 
 # =========================
 # AI FUNCTION
 # =========================
-def ask_ai(user_text: str, mode: str) -> str:
+def ask_ai(user_id: str, user_text: str) -> str:
     try:
-        if mode == "short":
-            style = "Antworte sehr kurz (max 2 Sätze)."
-        elif mode == "long":
-            style = "Antworte ausführlich, strukturiert und erklärend."
-        else:
-            style = "Antworte normal, klar und natürlich."
+        user_mem = get_user_memory(user_id)
+
+        memory_text = ""
+
+        if user_mem:
+            memory_text = f"Bekannt über den Nutzer: {user_mem}"
+
+        full_prompt = f"""
+{memory_text}
+
+User sagt: {user_text}
+"""
 
         response = requests.post(
             API_URL,
@@ -82,7 +110,7 @@ def ask_ai(user_text: str, mode: str) -> str:
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"{style}\n\n{user_text}"}
+                    {"role": "user", "content": full_prompt}
                 ],
                 "temperature": 0.6,
                 "max_tokens": 500
@@ -94,26 +122,27 @@ def ask_ai(user_text: str, mode: str) -> str:
         print("TEXT:", response.text)
 
         if response.status_code != 200:
-            return "API Fehler – bitte später erneut versuchen."
+            return "API Fehler"
 
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception:
-        return "Verbindungsfehler – bitte erneut versuchen."
+        return "Fehler beim Verarbeiten"
 
 # =========================
 # HANDLER
 # =========================
 @dp.message()
 async def handle(message: Message):
-    mode, text = parse_command(message.text or "")
+    user_id = message.from_user.id
+    user_text = message.text or ""
 
-    if mode == "short" and not text:
-        await message.answer("Kurz-Modus aktiv. Schreib deine Frage.")
-        return
+    # MEMORY SPEICHERN
+    update_user_memory(user_id, user_text)
 
-    answer = ask_ai(text, mode)
+    # KI ANTWORT
+    answer = ask_ai(user_id, user_text)
 
     await message.answer(answer)
 
