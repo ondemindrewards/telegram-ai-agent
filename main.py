@@ -11,40 +11,9 @@ from aiogram.types import Message
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN fehlt")
-if not GROQ_API_KEY:
-    raise Exception("GROQ_API_KEY fehlt")
-
-# =========================
-# BOT
-# =========================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =========================
-# MEMORY FILE
-# =========================
-MEMORY_FILE = "memory.json"
-
-def load_memory():
-    try:
-        if os.path.exists(MEMORY_FILE):
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
-    except:
-        return {}
-
-def save_memory(data):
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-memory = load_memory()
-
-# =========================
-# GROQ API
-# =========================
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 HEADERS = {
@@ -53,54 +22,86 @@ HEADERS = {
 }
 
 # =========================
-# SYSTEM PROMPT (MEMORY AWARE)
+# MEMORY FILE
+# =========================
+MEMORY_FILE = "memory.json"
+
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_memory(data):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+memory = load_memory()
+
+def get_user(uid):
+    uid = str(uid)
+    if uid not in memory:
+        memory[uid] = {
+            "facts": [],
+            "important": [],
+            "history": [],
+            "summary": ""
+        }
+    return memory[uid]
+
+# =========================
+# MEMORY TRIGGER LOGIC
+# =========================
+MEMORY_TRIGGERS = [
+    "merk dir das",
+    "behalt das im hinterkopf",
+    "das ist wichtig",
+    "remember:",
+    "save:"
+]
+
+def should_save(text: str):
+    t = text.lower()
+    return any(trigger in t for trigger in MEMORY_TRIGGERS)
+
+def clean_memory_text(text: str):
+    for trigger in MEMORY_TRIGGERS:
+        text = text.replace(trigger, "")
+    return text.strip()
+
+# =========================
+# MEMORY COMPRESSION
+# =========================
+def compress(user):
+    user["history"] = user["history"][-25:]
+    user["summary"] = " | ".join(user["history"][-8:])
+
+# =========================
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein intelligenter, natürlicher Chat-Assistent. "
-    "Du sprichst wie ein Mensch im Chat. "
-    "Du nutzt gespeicherte Informationen über den Nutzer, wenn sie hilfreich sind. "
-    "Du bist freundlich, direkt und merkst dir wichtige Details über Zeit hinweg."
+    "Du bist ein extrem natürlicher, stabiler Chat-Assistent. "
+    "Du nutzt gespeicherte Infos sinnvoll, ohne sie zu übertreiben. "
+
+    "REGELN:"
+    "- Keine Selbstwidersprüche"
+    "- Keine KI-Erklärungen"
+    "- Keine Meta-Kommentare"
+    "- Klar, direkt, menschlich antworten"
 )
 
 # =========================
-# MEMORY HELPER
+# AI CALL
 # =========================
-def get_user_memory(user_id: str):
-    return memory.get(str(user_id), {})
-
-def update_user_memory(user_id: str, text: str):
-    user_id = str(user_id)
-
-    if user_id not in memory:
-        memory[user_id] = {
-            "facts": [],
-            "last_messages": []
-        }
-
-    # einfache "intelligente" Speicherung
-    memory[user_id]["last_messages"].append(text)
-
-    # nur letzte 10 speichern
-    memory[user_id]["last_messages"] = memory[user_id]["last_messages"][-10:]
-
-    save_memory(memory)
-
-# =========================
-# AI FUNCTION
-# =========================
-def ask_ai(user_id: str, user_text: str) -> str:
+def ask_ai(uid, user_text):
     try:
-        user_mem = get_user_memory(user_id)
+        user = get_user(uid)
+        compress(user)
 
-        memory_text = ""
-
-        if user_mem:
-            memory_text = f"Bekannt über den Nutzer: {user_mem}"
-
-        full_prompt = f"""
-{memory_text}
-
-User sagt: {user_text}
+        memory_block = f"""
+MEMORY:
+Summary: {user['summary']}
+Important: {user['important']}
 """
 
         response = requests.post(
@@ -110,16 +111,13 @@ User sagt: {user_text}
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": full_prompt}
+                    {"role": "user", "content": memory_block + "\n\nUser: " + user_text}
                 ],
-                "temperature": 0.6,
+                "temperature": 0.55,
                 "max_tokens": 500
             },
             timeout=60
         )
-
-        print("STATUS:", response.status_code)
-        print("TEXT:", response.text)
 
         if response.status_code != 200:
             return "API Fehler"
@@ -128,21 +126,34 @@ User sagt: {user_text}
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception:
-        return "Fehler beim Verarbeiten"
+        return "Fehler"
+
+# =========================
+# MEMORY UPDATE
+# =========================
+def update_memory(uid, text):
+    user = get_user(uid)
+
+    user["history"].append(text)
+
+    # NUR speichern wenn Nutzer es will
+    if should_save(text):
+        clean = clean_memory_text(text)
+        user["important"].append(clean)
+
+    save_memory(memory)
 
 # =========================
 # HANDLER
 # =========================
 @dp.message()
 async def handle(message: Message):
-    user_id = message.from_user.id
-    user_text = message.text or ""
+    uid = message.from_user.id
+    text = message.text or ""
 
-    # MEMORY SPEICHERN
-    update_user_memory(user_id, user_text)
+    update_memory(uid, text)
 
-    # KI ANTWORT
-    answer = ask_ai(user_id, user_text)
+    answer = ask_ai(uid, text)
 
     await message.answer(answer)
 
