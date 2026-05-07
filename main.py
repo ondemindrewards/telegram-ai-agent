@@ -3,6 +3,7 @@ import asyncio
 import requests
 import json
 import re
+from collections import defaultdict
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
@@ -50,7 +51,7 @@ def compress(user):
     user["summary"] = " | ".join(user["history"][-10:])
 
 # =========================
-# STEP 1: SEARCH
+# MULTI SEARCH ENGINE
 # =========================
 def web_search(query):
     try:
@@ -74,78 +75,87 @@ def web_search(query):
             if isinstance(topic, dict) and topic.get("Text"):
                 results.append(topic["Text"])
 
-        return results[:8]
+        return results
 
     except:
         return []
 
 # =========================
-# STEP 2: URL EXTRACTION
+# QUALITY SCORING (SIMPLE RANKING ENGINE)
 # =========================
-def extract_urls(text):
-    return re.findall(r'https?://\\S+', text)
+def score_source(text):
+    score = 0
 
-# =========================
-# STEP 3: FETCH CONTENT
-# =========================
-def fetch_url(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
+    # length = more info = better
+    score += min(len(text) / 200, 5)
 
-        if r.status_code != 200:
-            return ""
+    # keywords boost
+    trusted_keywords = ["study", "research", "data", "analysis", "report", "official"]
+    for k in trusted_keywords:
+        if k in text.lower():
+            score += 2
 
-        html = r.text
+    return score
 
-        html = re.sub(r'<script.*?</script>', '', html, flags=re.S)
-        html = re.sub(r'<style.*?</style>', '', html, flags=re.S)
-        html = re.sub(r'<.*?>', ' ', html)
+def deduplicate_and_rank(results):
+    seen = set()
+    scored = []
 
-        return html[:2500]
+    for r in results:
+        clean = r.strip()
+        if not clean:
+            continue
 
-    except:
-        return ""
+        # dedup
+        if clean.lower() in seen:
+            continue
 
-# =========================
-# STEP 4: RESEARCH PIPELINE (MULTI STEP)
-# =========================
-def build_research_package(query):
-    search_results = web_search(query)
+        seen.add(clean.lower())
 
-    # optional: extract fake URLs from results text
-    urls = []
-    for r in search_results:
-        urls += extract_urls(r)
+        scored.append((score_source(clean), clean))
 
-    urls = list(set(urls))[:3]
+    # sort by score (highest first)
+    scored.sort(reverse=True, key=lambda x: x[0])
 
-    url_content = ""
-    for u in urls:
-        url_content += fetch_url(u) + "\n\n"
-
-    return {
-        "search": "\n".join(search_results),
-        "urls": url_content
-    }
+    return [s[1] for s in scored[:8]]
 
 # =========================
-# SYSTEM PROMPT (PREMIUM RESEARCH)
+# RESEARCH BUILDER
+# =========================
+def build_research(query):
+    # Multi-query expansion
+    queries = [
+        query,
+        query + " explanation",
+        query + " facts",
+    ]
+
+    all_results = []
+
+    for q in queries:
+        all_results.extend(web_search(q))
+
+    ranked = deduplicate_and_rank(all_results)
+
+    return "\n".join(ranked)
+
+# =========================
+# SYSTEM PROMPT (PRO LEVEL)
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein professioneller Multi-Step Research AI Agent. "
-    "Du analysierst Informationen wie ein Analyst. "
+    "Du bist ein professioneller Research AI Agent mit Quellenlogik. "
+    "Du analysierst Informationen strukturiert und vergleichst Quellen. "
 
-    "DU ARBEITEST IN GEDANKLICHEN SCHRITTEN:"
-    "1. Verstehen der Frage"
-    "2. Analyse der Webdaten"
-    "3. Vergleich der Informationen"
-    "4. Bildung einer finalen, strukturierten Antwort"
+    "ARBEITSWEISE:"
+    "1. Informationen lesen"
+    "2. Unterschiede erkennen"
+    "3. logische Zusammenfassung erstellen"
+    "4. klare, saubere Antwort liefern"
 
     "REGELN:"
-    "- Keine Halluzinationen"
-    "- Nur basierend auf Daten antworten"
-    "- Strukturierte Antwort (Einleitung, Analyse, Fazit)"
+    "- keine Halluzinationen"
+    "- nutze nur bereitgestellte Daten"
+    "- klare Struktur"
 )
 
 # =========================
@@ -156,7 +166,7 @@ def ask_ai(uid, user_text):
         user = get_user(uid)
         compress(user)
 
-        research = build_research_package(user_text)
+        research_data = build_research(user_text)
 
         memory_block = f"MEMORY: {user['summary']}"
 
@@ -168,11 +178,8 @@ def ask_ai(uid, user_text):
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"""
-STEP 1 - SEARCH DATA:
-{research['search']}
-
-STEP 2 - WEB CONTENT:
-{research['urls']}
+RESEARCH SOURCES (ranked + deduplicated):
+{research_data}
 
 MEMORY:
 {memory_block}
@@ -181,7 +188,7 @@ QUESTION:
 {user_text}
 """}
                 ],
-                "temperature": 0.25,
+                "temperature": 0.2,
                 "max_tokens": 1000
             },
             timeout=60
