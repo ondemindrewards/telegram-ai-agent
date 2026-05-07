@@ -3,16 +3,16 @@ import requests
 import asyncio
 from aiogram import Bot, Dispatcher, types
 
-# Tokens aus Railway Environment Variables
+# Environment Variables (Railway)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Bot Setup
+# Bot initialisieren
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# HuggingFace Model
-API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+# ✔ funktionierendes Modell
+API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}"
@@ -21,16 +21,22 @@ headers = {
 # KI Anfrage
 def ask_ai(prompt):
     try:
-        r = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+        r = requests.post(
+            API_URL,
+            headers=headers,
+            json={"inputs": prompt}
+        )
 
         print("STATUS:", r.status_code)
         print("TEXT:", r.text)
 
+        # Fehler sauber anzeigen
         if r.status_code != 200:
             return f"HF Fehler {r.status_code}: {r.text}"
 
         data = r.json()
 
+        # verschiedene Antwortformate abfangen
         if isinstance(data, list):
             if len(data) > 0 and isinstance(data[0], dict):
                 return data[0].get("generated_text", str(data[0]))
@@ -42,13 +48,21 @@ def ask_ai(prompt):
         return str(data)
 
     except Exception as e:
-        return f"Fehler: {e}"
+        return f"Fehler im Bot: {e}"
 
 
-# Message Handler
+# Telegram Handler
 @dp.message()
 async def handle(message: types.Message):
-    prompt = f"User: {message.text}"
+    user_text = message.text
+
+    prompt = f"""
+Du bist ein hilfreicher KI-Assistent.
+Antworte kurz und verständlich.
+
+User: {user_text}
+"""
+
     answer = ask_ai(prompt)
     await message.answer(answer)
 
