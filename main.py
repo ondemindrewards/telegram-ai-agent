@@ -4,45 +4,56 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 
-# Railway Environment Variables
+# Environment Variables (Railway)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Bot Setup
+if not BOT_TOKEN:
+    raise Exception("BOT_TOKEN fehlt in Railway Variables")
+if not HF_TOKEN:
+    raise Exception("HF_TOKEN fehlt in Railway Variables")
+
+# Bot Setup (aiogram 3.x)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ✔ stabiler HuggingFace Endpoint
-API_URL = "https://api-inference.huggingface.co/models/distilgpt2"
+# ✔ stabiles HF Modell
+API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
 
 headers = {
-    "Authorization": f"Bearer {HF_TOKEN}"
+    "Authorization": f"Bearer {HF_TOKEN}",
+    "Content-Type": "application/json"
 }
 
 # KI Anfrage
 def ask_ai(prompt):
     try:
-        r = requests.post(
+        response = requests.post(
             API_URL,
             headers=headers,
-            json={"inputs": prompt},
-            timeout=30
+            json={
+                "inputs": prompt,
+                "options": {
+                    "wait_for_model": True
+                }
+            },
+            timeout=60
         )
 
-        print("STATUS:", r.status_code)
-        print("TEXT:", r.text)
+        print("STATUS:", response.status_code)
+        print("TEXT:", response.text)
 
-        # Fehler abfangen
-        if r.status_code != 200:
-            return f"HF Fehler {r.status_code}: {r.text}"
+        if response.status_code != 200:
+            return f"HF Fehler {response.status_code}: {response.text}"
 
-        data = r.json()
+        data = response.json()
 
-        # Antwort auslesen
+        # HuggingFace Antwort verarbeiten
         if isinstance(data, list) and len(data) > 0:
-            if isinstance(data[0], dict):
-                return data[0].get("generated_text", str(data[0]))
-            return str(data[0])
+            item = data[0]
+            if isinstance(item, dict):
+                return item.get("generated_text", str(item))
+            return str(item)
 
         if isinstance(data, dict):
             return data.get("generated_text", str(data))
@@ -58,7 +69,12 @@ def ask_ai(prompt):
 async def handle(message: Message):
     user_text = message.text or ""
 
-    prompt = f"User: {user_text}\nAI:"
+    prompt = f"""
+Du bist ein hilfreicher Assistent.
+Antworte kurz und klar.
+
+User: {user_text}
+"""
 
     answer = ask_ai(prompt)
 
