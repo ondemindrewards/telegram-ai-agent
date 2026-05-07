@@ -11,9 +11,15 @@ from aiogram.types import Message
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+if not BOT_TOKEN or not GROQ_API_KEY:
+    raise Exception("Fehlende Environment Variables")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# =========================
+# GROQ API
+# =========================
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 HEADERS = {
@@ -22,7 +28,7 @@ HEADERS = {
 }
 
 # =========================
-# MEMORY SYSTEM (ULTRA)
+# MEMORY SYSTEM
 # =========================
 MEMORY_FILE = "memory.json"
 
@@ -42,88 +48,84 @@ def get_user(uid):
     uid = str(uid)
     if uid not in memory:
         memory[uid] = {
-            "facts": [],
-            "important": [],
             "history": [],
+            "important": [],
             "summary": ""
         }
     return memory[uid]
 
-# =========================
-# INTELLIGENT MEMORY DETECTION
-# =========================
-IMPORTANT_HINTS = [
-    "ich heiße",
-    "mein name ist",
-    "ich bin",
-    "ich arbeite",
-    "ich studiere",
-    "mein projekt",
-    "ich will",
-    "ich mache",
-    "ich wohne"
-]
-
-USER_SAVE_COMMANDS = [
-    "merk dir das",
-    "behalt das im hinterkopf",
-    "das ist wichtig",
-    "remember:",
-    "save:"
-]
-
-def is_important(text: str):
-    t = text.lower()
-    return any(hint in t for hint in IMPORTANT_HINTS)
-
-def user_forced_save(text: str):
-    t = text.lower()
-    return any(cmd in t for cmd in USER_SAVE_COMMANDS)
-
-def clean(text: str):
-    for cmd in USER_SAVE_COMMANDS:
-        text = text.replace(cmd, "")
-    return text.strip()
-
-# =========================
-# MEMORY COMPRESSION
-# =========================
 def compress(user):
-    user["history"] = user["history"][-40:]  # mehr Kontext behalten
-
-    # Auto-Summary (leichtgewichtig)
+    user["history"] = user["history"][-40:]
     user["summary"] = " | ".join(user["history"][-10:])
 
 # =========================
-# SYSTEM PROMPT (ULTRA NATURAL)
+# WEB SEARCH (FREE)
+# =========================
+def web_search(query):
+    try:
+        url = "https://api.duckduckgo.com/"
+        params = {
+            "q": query,
+            "format": "json",
+            "no_html": 1,
+            "skip_disambig": 1
+        }
+
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+
+        results = []
+
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"])
+
+        for topic in data.get("RelatedTopics", [])[:5]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                results.append(topic["Text"])
+
+        return results[:5]
+
+    except:
+        return []
+
+# =========================
+# MEMORY UPDATE
+# =========================
+def update_memory(uid, text):
+    user = get_user(uid)
+
+    user["history"].append(text)
+    save_memory(memory)
+
+# =========================
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein extrem intelligenter, natürlicher und stabiler Chat-Assistent. "
-    "Du führst echte Gespräche wie ein Mensch. "
+    "Du bist ein intelligenter Deep-Research-Assistent. "
+    "Du nutzt Webdaten und Memory, um präzise Antworten zu geben. "
 
     "REGELN:"
-    "- Antworte klar und ohne Widersprüche"
+    "- Keine Halluzinationen"
+    "- Nutze Webdaten wenn vorhanden"
+    "- Antworte strukturiert"
     "- Keine KI-Erklärungen"
-    "- Keine Meta-Diskussionen über dich selbst"
-    "- Keine unnötigen Wiederholungen"
-    "- Nutze gespeicherte Informationen sinnvoll"
-    "- Sei natürlich, direkt und hilfreich"
 )
 
 # =========================
-# AI FUNCTION
+# AI FUNCTION (RESEARCH MODE)
 # =========================
 def ask_ai(uid, user_text):
     try:
         user = get_user(uid)
         compress(user)
 
+        # 🌐 WEB SEARCH
+        search_results = web_search(user_text)
+        web_data = "\n".join(search_results) if search_results else "Keine Webdaten gefunden."
+
         memory_block = f"""
 MEMORY SUMMARY:
 {user['summary']}
-
-IMPORTANT FACTS:
-{user['important']}
 """
 
         response = requests.post(
@@ -133,13 +135,25 @@ IMPORTANT FACTS:
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": memory_block + "\n\nUser: " + user_text}
+                    {"role": "user", "content": f"""
+WEB SEARCH RESULTS:
+{web_data}
+
+MEMORY:
+{memory_block}
+
+QUESTION:
+{user_text}
+"""}
                 ],
-                "temperature": 0.55,
-                "max_tokens": 600
+                "temperature": 0.3,
+                "max_tokens": 800
             },
             timeout=60
         )
+
+        print("STATUS:", response.status_code)
+        print("TEXT:", response.text)
 
         if response.status_code != 200:
             return "API Fehler"
@@ -147,28 +161,8 @@ IMPORTANT FACTS:
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
 
-    except Exception:
-        return "Fehler im System"
-
-# =========================
-# MEMORY UPDATE ENGINE
-# =========================
-def update_memory(uid, text):
-    user = get_user(uid)
-
-    user["history"].append(text)
-
-    t = text.lower()
-
-    # 1. User forced memory
-    if user_forced_save(t):
-        user["important"].append(clean(text))
-
-    # 2. Auto important detection
-    elif is_important(t):
-        user["facts"].append(text)
-
-    save_memory(memory)
+    except Exception as e:
+        return f"Fehler: {e}"
 
 # =========================
 # HANDLER
