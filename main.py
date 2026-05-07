@@ -1,38 +1,42 @@
 import os
-import requests
 import asyncio
+import requests
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
-# Tokens (Railway Environment Variables)
+# ===== ENV VARS (Railway) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN fehlt")
-if not HF_TOKEN:
-    raise Exception("HF_TOKEN fehlt")
+    raise Exception("BOT_TOKEN fehlt in Railway Variables")
+if not GROQ_API_KEY:
+    raise Exception("GROQ_API_KEY fehlt in Railway Variables")
 
-# Bot Setup (aiogram 3.x)
+# ===== TELEGRAM BOT =====
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Stabiler HF Endpoint (Pipeline API statt /models/)
-API_URL = "https://api-inference.huggingface.co/pipeline/text-generation/google/flan-t5-small"
+# ===== GROQ API =====
+API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-headers = {
-    "Authorization": f"Bearer {HF_TOKEN}",
+HEADERS = {
+    "Authorization": f"Bearer {GROQ_API_KEY}",
     "Content-Type": "application/json"
 }
 
-# KI Anfrage
-def ask_ai(prompt):
+def ask_ai(prompt: str) -> str:
     try:
         response = requests.post(
             API_URL,
-            headers=headers,
+            headers=HEADERS,
             json={
-                "inputs": prompt
+                "model": "llama3-8b-8192",
+                "messages": [
+                    {"role": "system", "content": "Du bist ein hilfreicher Assistent."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.7
             },
             timeout=60
         )
@@ -41,36 +45,24 @@ def ask_ai(prompt):
         print("TEXT:", response.text)
 
         if response.status_code != 200:
-            return f"HF Fehler {response.status_code}: {response.text}"
+            return f"Groq Fehler {response.status_code}: {response.text}"
 
         data = response.json()
-
-        # Antwort auslesen
-        if isinstance(data, list) and len(data) > 0:
-            item = data[0]
-            if isinstance(item, dict):
-                return item.get("generated_text", str(item))
-            return str(item)
-
-        return str(data)
+        return data["choices"][0]["message"]["content"]
 
     except Exception as e:
-        return f"Bot Fehler: {e}"
+        return f"Fehler: {e}"
 
 
-# Telegram Handler
+# ===== TELEGRAM HANDLER =====
 @dp.message()
 async def handle(message: Message):
     user_text = message.text or ""
-
-    prompt = f"User: {user_text}\nAssistant:"
-
-    answer = ask_ai(prompt)
-
+    answer = ask_ai(user_text)
     await message.answer(answer)
 
 
-# Start Bot
+# ===== START =====
 async def main():
     await dp.start_polling(bot)
 
