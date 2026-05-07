@@ -9,9 +9,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN fehlt in Railway Variables")
+    raise Exception("BOT_TOKEN fehlt")
 if not GROQ_API_KEY:
-    raise Exception("GROQ_API_KEY fehlt in Railway Variables")
+    raise Exception("GROQ_API_KEY fehlt")
 
 # ===== TELEGRAM BOT =====
 bot = Bot(token=BOT_TOKEN)
@@ -31,7 +31,8 @@ def ask_ai(prompt: str) -> str:
             API_URL,
             headers=HEADERS,
             json={
-                "model": "llama3-8b-8192",
+                # 🔥 AKTUELLES FUNKTIONIERENDES MODELL
+                "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": "Du bist ein hilfreicher Assistent."},
                     {"role": "user", "content": prompt}
@@ -62,7 +63,7 @@ async def handle(message: Message):
     await message.answer(answer)
 
 
-# ===== START =====
+# ===== START BOT =====
 async def main():
     await dp.start_polling(bot)
 
