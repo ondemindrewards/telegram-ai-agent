@@ -22,7 +22,7 @@ HEADERS = {
 }
 
 # =========================
-# MEMORY FILE
+# MEMORY SYSTEM (ULTRA)
 # =========================
 MEMORY_FILE = "memory.json"
 
@@ -50,9 +50,21 @@ def get_user(uid):
     return memory[uid]
 
 # =========================
-# MEMORY TRIGGER LOGIC
+# INTELLIGENT MEMORY DETECTION
 # =========================
-MEMORY_TRIGGERS = [
+IMPORTANT_HINTS = [
+    "ich heiße",
+    "mein name ist",
+    "ich bin",
+    "ich arbeite",
+    "ich studiere",
+    "mein projekt",
+    "ich will",
+    "ich mache",
+    "ich wohne"
+]
+
+USER_SAVE_COMMANDS = [
     "merk dir das",
     "behalt das im hinterkopf",
     "das ist wichtig",
@@ -60,38 +72,46 @@ MEMORY_TRIGGERS = [
     "save:"
 ]
 
-def should_save(text: str):
+def is_important(text: str):
     t = text.lower()
-    return any(trigger in t for trigger in MEMORY_TRIGGERS)
+    return any(hint in t for hint in IMPORTANT_HINTS)
 
-def clean_memory_text(text: str):
-    for trigger in MEMORY_TRIGGERS:
-        text = text.replace(trigger, "")
+def user_forced_save(text: str):
+    t = text.lower()
+    return any(cmd in t for cmd in USER_SAVE_COMMANDS)
+
+def clean(text: str):
+    for cmd in USER_SAVE_COMMANDS:
+        text = text.replace(cmd, "")
     return text.strip()
 
 # =========================
 # MEMORY COMPRESSION
 # =========================
 def compress(user):
-    user["history"] = user["history"][-25:]
-    user["summary"] = " | ".join(user["history"][-8:])
+    user["history"] = user["history"][-40:]  # mehr Kontext behalten
+
+    # Auto-Summary (leichtgewichtig)
+    user["summary"] = " | ".join(user["history"][-10:])
 
 # =========================
-# SYSTEM PROMPT
+# SYSTEM PROMPT (ULTRA NATURAL)
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein extrem natürlicher, stabiler Chat-Assistent. "
-    "Du nutzt gespeicherte Infos sinnvoll, ohne sie zu übertreiben. "
+    "Du bist ein extrem intelligenter, natürlicher und stabiler Chat-Assistent. "
+    "Du führst echte Gespräche wie ein Mensch. "
 
     "REGELN:"
-    "- Keine Selbstwidersprüche"
+    "- Antworte klar und ohne Widersprüche"
     "- Keine KI-Erklärungen"
-    "- Keine Meta-Kommentare"
-    "- Klar, direkt, menschlich antworten"
+    "- Keine Meta-Diskussionen über dich selbst"
+    "- Keine unnötigen Wiederholungen"
+    "- Nutze gespeicherte Informationen sinnvoll"
+    "- Sei natürlich, direkt und hilfreich"
 )
 
 # =========================
-# AI CALL
+# AI FUNCTION
 # =========================
 def ask_ai(uid, user_text):
     try:
@@ -99,9 +119,11 @@ def ask_ai(uid, user_text):
         compress(user)
 
         memory_block = f"""
-MEMORY:
-Summary: {user['summary']}
-Important: {user['important']}
+MEMORY SUMMARY:
+{user['summary']}
+
+IMPORTANT FACTS:
+{user['important']}
 """
 
         response = requests.post(
@@ -114,7 +136,7 @@ Important: {user['important']}
                     {"role": "user", "content": memory_block + "\n\nUser: " + user_text}
                 ],
                 "temperature": 0.55,
-                "max_tokens": 500
+                "max_tokens": 600
             },
             timeout=60
         )
@@ -126,20 +148,25 @@ Important: {user['important']}
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception:
-        return "Fehler"
+        return "Fehler im System"
 
 # =========================
-# MEMORY UPDATE
+# MEMORY UPDATE ENGINE
 # =========================
 def update_memory(uid, text):
     user = get_user(uid)
 
     user["history"].append(text)
 
-    # NUR speichern wenn Nutzer es will
-    if should_save(text):
-        clean = clean_memory_text(text)
-        user["important"].append(clean)
+    t = text.lower()
+
+    # 1. User forced memory
+    if user_forced_save(t):
+        user["important"].append(clean(text))
+
+    # 2. Auto important detection
+    elif is_important(t):
+        user["facts"].append(text)
 
     save_memory(memory)
 
