@@ -9,7 +9,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct"
+API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
 
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
