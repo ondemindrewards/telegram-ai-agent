@@ -27,11 +27,10 @@ def ask_ai(prompt):
         print("TEXT:", r.text)
 
         if r.status_code != 200:
-    return f"HF Fehler {r.status_code}: {r.text}"
+            return f"HF Fehler {r.status_code}: {r.text}"
 
         data = r.json()
 
-        # verschiedene mögliche Antwortformate abfangen
         if isinstance(data, list):
             if len(data) > 0 and isinstance(data[0], dict):
                 return data[0].get("generated_text", str(data[0]))
