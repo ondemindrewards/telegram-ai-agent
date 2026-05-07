@@ -2,6 +2,7 @@ import os
 import asyncio
 import requests
 import json
+import re
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
@@ -11,15 +12,9 @@ from aiogram.types import Message
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not BOT_TOKEN or not GROQ_API_KEY:
-    raise Exception("Fehlende Environment Variables")
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =========================
-# GROQ API
-# =========================
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 HEADERS = {
@@ -49,7 +44,6 @@ def get_user(uid):
     if uid not in memory:
         memory[uid] = {
             "history": [],
-            "important": [],
             "summary": ""
         }
     return memory[uid]
@@ -89,30 +83,60 @@ def web_search(query):
         return []
 
 # =========================
+# URL CONTENT READER
+# =========================
+def extract_urls(text):
+    return re.findall(r'https?://\\S+', text)
+
+def fetch_url(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+
+        if r.status_code != 200:
+            return f"Fehler {r.status_code}"
+
+        html = r.text
+
+        # clean html
+        html = re.sub(r'<script.*?</script>', '', html, flags=re.S)
+        html = re.sub(r'<style.*?</style>', '', html, flags=re.S)
+        html = re.sub(r'<.*?>', ' ', html)
+
+        return html[:3000]
+
+    except Exception as e:
+        return str(e)
+
+# =========================
 # MEMORY UPDATE
 # =========================
 def update_memory(uid, text):
     user = get_user(uid)
-
     user["history"].append(text)
     save_memory(memory)
 
 # =========================
-# SYSTEM PROMPT
+# SYSTEM PROMPT (RESEARCH MODE)
 # =========================
 SYSTEM_PROMPT = (
-    "Du bist ein intelligenter Deep-Research-Assistent. "
-    "Du nutzt Webdaten und Memory, um präzise Antworten zu geben. "
+    "Du bist ein professioneller Deep-Research-KI-Assistent. "
+    "Du analysierst Informationen aus Websuche und Webseiteninhalt. "
+
+    "ARBEITSWEISE:"
+    "1. Verstehe die Frage"
+    "2. Nutze Webdaten + Webseiteninhalt"
+    "3. Strukturierte Analyse schreiben"
+    "4. Klare Schlussfolgerung geben"
 
     "REGELN:"
     "- Keine Halluzinationen"
-    "- Nutze Webdaten wenn vorhanden"
-    "- Antworte strukturiert"
-    "- Keine KI-Erklärungen"
+    "- Nur basierend auf Daten antworten"
+    "- Strukturiert und professionell"
 )
 
 # =========================
-# AI FUNCTION (RESEARCH MODE)
+# AI RESEARCH ENGINE
 # =========================
 def ask_ai(uid, user_text):
     try:
@@ -121,12 +145,17 @@ def ask_ai(uid, user_text):
 
         # 🌐 WEB SEARCH
         search_results = web_search(user_text)
-        web_data = "\n".join(search_results) if search_results else "Keine Webdaten gefunden."
+        web_data = "\n".join(search_results)
 
-        memory_block = f"""
-MEMORY SUMMARY:
-{user['summary']}
-"""
+        # 🌐 URL CONTENT
+        urls = extract_urls(user_text)
+        url_data = ""
+
+        for u in urls[:2]:
+            url_data += "\n\nURL CONTENT:\n"
+            url_data += fetch_url(u)
+
+        memory_block = f"MEMORY: {user['summary']}"
 
         response = requests.post(
             API_URL,
@@ -136,8 +165,11 @@ MEMORY SUMMARY:
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"""
-WEB SEARCH RESULTS:
+WEB SEARCH:
 {web_data}
+
+URL DATA:
+{url_data}
 
 MEMORY:
 {memory_block}
@@ -147,13 +179,10 @@ QUESTION:
 """}
                 ],
                 "temperature": 0.3,
-                "max_tokens": 800
+                "max_tokens": 900
             },
             timeout=60
         )
-
-        print("STATUS:", response.status_code)
-        print("TEXT:", response.text)
 
         if response.status_code != 200:
             return "API Fehler"
