@@ -15,10 +15,23 @@ headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 def ask_ai(prompt):
     r = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+
+    print("STATUS:", r.status_code)
+    print("TEXT:", r.text)
+
+    if r.status_code != 200:
+        return "HF API Fehler"
+
     try:
-        return r.json()[0]["generated_text"]
-    except:
-        return "KI gerade nicht erreichbar"
+        data = r.json()
+
+        if isinstance(data, list):
+            return data[0].get("generated_text", "Keine Antwort")
+
+        return str(data)
+
+    except Exception as e:
+        return f"Parse Fehler: {e}"
 
 @dp.message()
 async def handle(message: types.Message):
