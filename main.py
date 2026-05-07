@@ -1,24 +1,24 @@
 import os
 import requests
 import asyncio
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
-# Environment Variables (Railway)
+# Tokens (Railway Environment Variables)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN fehlt in Railway Variables")
+    raise Exception("BOT_TOKEN fehlt")
 if not HF_TOKEN:
-    raise Exception("HF_TOKEN fehlt in Railway Variables")
+    raise Exception("HF_TOKEN fehlt")
 
 # Bot Setup (aiogram 3.x)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ✔ stabiles HF Modell
-API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
+# Stabiler HF Endpoint (Pipeline API statt /models/)
+API_URL = "https://api-inference.huggingface.co/pipeline/text-generation/google/flan-t5-small"
 
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
@@ -32,10 +32,7 @@ def ask_ai(prompt):
             API_URL,
             headers=headers,
             json={
-                "inputs": prompt,
-                "options": {
-                    "wait_for_model": True
-                }
+                "inputs": prompt
             },
             timeout=60
         )
@@ -48,15 +45,12 @@ def ask_ai(prompt):
 
         data = response.json()
 
-        # HuggingFace Antwort verarbeiten
+        # Antwort auslesen
         if isinstance(data, list) and len(data) > 0:
             item = data[0]
             if isinstance(item, dict):
                 return item.get("generated_text", str(item))
             return str(item)
-
-        if isinstance(data, dict):
-            return data.get("generated_text", str(data))
 
         return str(data)
 
@@ -69,12 +63,7 @@ def ask_ai(prompt):
 async def handle(message: Message):
     user_text = message.text or ""
 
-    prompt = f"""
-Du bist ein hilfreicher Assistent.
-Antworte kurz und klar.
-
-User: {user_text}
-"""
+    prompt = f"User: {user_text}\nAssistant:"
 
     answer = ask_ai(prompt)
 
