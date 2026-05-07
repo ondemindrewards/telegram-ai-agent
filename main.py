@@ -1,7 +1,6 @@
 import os
 import requests
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -44,3 +43,14 @@ User: {user_text}
 
 if __name__ == "__main__":
     executor.start_polling(dp)
+import asyncio
+from aiogram import Bot, Dispatcher
+
+async def main():
+    bot = Bot(token="DEIN_TOKEN")
+    dp = Dispatcher()
+
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
